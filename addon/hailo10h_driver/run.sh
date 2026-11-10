@@ -113,6 +113,11 @@ load() {
 
 STATE=""        # last state we notified about: waiting | failed | online
 LAST_ERR=""
+log "starting: HAOS $(haos_version), kernel $(uname -r), modules from github.com/$REPO"
+if [ ! -f /data/.autoupdate_announced ]; then
+  notify "AI HAT+2 driver: auto-update enabled" "The Hailo-10H Driver add-on now fetches the module built for each HAOS release, so OS updates need no manual rebuild. You'll be told here if the HAT is ever waiting for a new build."
+  touch /data/.autoupdate_announced
+fi
 while true; do
   KR=$(uname -r); VER=$(haos_version)
 
