@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/usr/bin/with-contenv bash
+# (with-contenv: the base image's s6 init hands CMD a scrubbed environment; this restores
+#  the container env, including SUPERVISOR_TOKEN for the Supervisor/Core API calls.)
 # Hailo-10H (Raspberry Pi AI HAT+ 2) driver loader for Home Assistant OS.
 #
 # HAOS has no Hailo-10H driver, and a kernel module only loads on the exact kernel it
