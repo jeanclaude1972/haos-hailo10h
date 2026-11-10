@@ -1,0 +1,32 @@
+name: Hailo-10H Driver
+version: "2.0.0"
+slug: hailo10h_driver
+description: >-
+  Loads the Hailo-10H (Raspberry Pi AI HAT+ 2) hailo1x_pci kernel module and its
+  firmware on Home Assistant OS, creating /dev/hailo0. Fetches the module built for
+  the running HAOS release, so OS updates need no manual rebuild.
+url: https://github.com/jeanclaude1972/haos-hailo10h
+arch:
+  - aarch64
+startup: system
+boot: auto
+init: false
+full_access: true
+# SYS_MODULE: insmod/rmmod. SYS_ADMIN + no AppArmor: remount /sys read-write to set the
+# kernel's firmware search path (the supervisor mounts /sys read-only for every add-on).
+apparmor: false
+privileged:
+  - SYS_MODULE
+  - SYS_ADMIN
+hassio_api: true
+homeassistant_api: true
+map:
+  - type: share
+    read_only: false
+options:
+  repo: jeanclaude1972/haos-hailo10h
+  retry_minutes: 30
+schema:
+  repo: str
+  retry_minutes: int(5,1440)
+  notify_service: str?

@@ -1,0 +1,13 @@
+# Proprietary Hailo firmware: never commit
+firmware/
+addon/hailo10h_driver/firmware/hailo/
+# Local build outputs and bundled modules (published as GitHub releases instead)
+out-*/
+addon/hailo10h_driver/bundled/*
+!addon/hailo10h_driver/bundled/.gitkeep
+# Driver source copy from the Raspberry Pi package (the workflow fetches Hailo's public repo)
+driver-src/
+# Personal/local
+.gcp_project
+sup_ws.py
+.DS_Store

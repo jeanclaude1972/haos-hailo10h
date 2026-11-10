@@ -1,0 +1,137 @@
+name: Build hailo1x_pci for new HAOS releases
+
+# Every 6 hours, look at the newest Home Assistant OS releases (stable and release
+# candidates). For each one that has no "haos-<version>" release here yet, build the
+# rpi5_64 kernel from that exact HAOS tag in HAOS's own builder container, compile
+# Hailo's hailo1x_pci driver against it, and publish the module as a release.
+# The Hailo-10H Driver add-on downloads modules from these releases.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      haos_tag:
+        description: "HAOS tag to build (e.g. 18.5). Leave empty to build any new releases."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-module
+  cancel-in-progress: false
+
+env:
+  HAOS_REPO: home-assistant/operating-system
+  HAOS_DEFCONFIG: rpi5_64
+  # Hailo's public GPL-2.0 driver source, pinned to the v5.1.1 tag's commit.
+  DRIVER_REPO: hailo-ai/hailort-drivers
+  DRIVER_TAG: v5.1.1
+  DRIVER_COMMIT: 0f7b9cac89e6b559ce825e04b5b017c820a7b080
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    outputs:
+      tags: ${{ steps.find.outputs.tags }}
+    steps:
+      - name: Find HAOS releases without a module
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.haos_tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            wanted="$INPUT_TAG"
+          else
+            wanted=$(gh api "repos/$HAOS_REPO/releases?per_page=6" \
+              --jq '[.[] | select(.draft | not)] | .[0:3][] | .tag_name')
+          fi
+          have=$(gh release list -R "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName')
+          todo=()
+          for t in $wanted; do
+            if [ -n "$INPUT_TAG" ] || ! grep -qx "haos-$t" <<<"$have"; then todo+=("$t"); fi
+          done
+          json=$(printf '%s\n' "${todo[@]}" | jq -R . | jq -sc 'map(select(length > 0))')
+          echo "To build: $json"
+          echo "tags=$json" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.tags != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        haos_tag: ${{ fromJson(needs.detect.outputs.tags) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk and prepare /mnt
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo mkdir -p /mnt/cache /mnt/work
+          sudo chown -R "$(id -u):$(id -g)" /mnt/cache /mnt/work
+          df -h / /mnt
+
+      - name: Restore build cache (ccache + downloads)
+        uses: actions/cache/restore@v4
+        with:
+          path: /mnt/cache
+          key: haos-${{ env.HAOS_DEFCONFIG }}-kernel-${{ matrix.haos_tag }}
+          restore-keys: haos-${{ env.HAOS_DEFCONFIG }}-kernel-
+
+      - name: Fetch HAOS ${{ matrix.haos_tag }} and pinned Hailo driver source
+        run: |
+          git clone --depth 1 --branch "${{ matrix.haos_tag }}" --recurse-submodules --shallow-submodules \
+            "https://github.com/$HAOS_REPO.git" /mnt/work/haos
+          git clone --depth 1 --branch "$DRIVER_TAG" "https://github.com/$DRIVER_REPO.git" /mnt/work/driver
+          got=$(git -C /mnt/work/driver rev-parse HEAD)
+          [ "$got" = "$DRIVER_COMMIT" ] || { echo "Driver tag moved: $got != $DRIVER_COMMIT"; exit 1; }
+          mkdir -p /mnt/work/haos/hailo-driver-src
+          cp -r /mnt/work/driver/common /mnt/work/driver/linux /mnt/work/haos/hailo-driver-src/
+          cp inner_build.sh /mnt/work/haos/inner_build.sh
+          git -C /mnt/work/driver archive --format=tar.gz --prefix="hailort-drivers-$DRIVER_TAG/" \
+            -o "/mnt/work/hailort-drivers-$DRIVER_TAG-source.tar.gz" HEAD
+
+      - name: Build kernel and hailo1x_pci (HAOS builder container)
+        working-directory: /mnt/work/haos
+        run: CACHE_DIR=/mnt/cache scripts/enter.sh bash /build/inner_build.sh
+
+      - name: Save build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: /mnt/cache
+          key: haos-${{ env.HAOS_DEFCONFIG }}-kernel-${{ matrix.haos_tag }}-${{ github.run_id }}
+
+      - name: Publish release haos-${{ matrix.haos_tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ matrix.haos_tag }}
+        run: |
+          O=/mnt/work/haos/out
+          KREL=$(cat "$O/kernel.release")
+          SHA=$(sha256sum "$O/hailo1x_pci.ko" | cut -d' ' -f1)
+          jq -n --arg haos "$TAG" --arg krel "$KREL" --arg vermagic "$(sed 's/^vermagic=//' "$O/vermagic.txt")" \
+                --arg sha "$SHA" --arg drv "$DRIVER_TAG" --arg commit "$DRIVER_COMMIT" \
+                --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+                --arg built "$(date -u +%FT%TZ)" \
+                '{haos_version:$haos, kernel_release:$krel, vermagic:$vermagic, sha256:$sha,
+                  driver_tag:$drv, driver_commit:$commit, built_at:$built, build_run:$run}' > "$O/manifest.json"
+          cat "$O/manifest.json"
+          pre=""; case "$TAG" in *rc*|*dev*) pre="--prerelease";; esac
+          gh release delete "haos-$TAG" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "haos-$TAG" -R "$GITHUB_REPOSITORY" $pre \
+            --title "hailo1x_pci $DRIVER_TAG for HAOS $TAG ($KREL)" \
+            --notes "Hailo-10H driver module for Home Assistant OS $TAG on Raspberry Pi 5 (kernel \`$KREL\`).
+          Built from [$DRIVER_REPO@$DRIVER_TAG]($GITHUB_SERVER_URL/$DRIVER_REPO/tree/$DRIVER_COMMIT) (GPL-2.0; exact source attached) against the HAOS $TAG kernel in HAOS's own builder container.
+          sha256: \`$SHA\`
+          Build log: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            "$O/hailo1x_pci.ko" "$O/manifest.json" "$O/vermagic.txt" "$O/kernel.release" "$O/Module.symvers" \
+            "/mnt/work/hailort-drivers-$DRIVER_TAG-source.tar.gz"
