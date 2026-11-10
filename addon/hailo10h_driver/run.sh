@@ -31,9 +31,10 @@ AUTH="Authorization: Bearer ${SUPERVISOR_TOKEN:-}"
 log() { echo "[hailo10h] $*"; }
 
 # Status goes to one rolling persistent notification (and optionally a notify service).
-# Core may not be up yet at system startup, so retry in the background.
+# Core may not be up yet at system startup, so retry in the background. If a marker
+# file is given, it is created only once Core has accepted the notification.
 notify() {
-  local title="$1" msg="$2"
+  local title="$1" msg="$2" marker="${3:-}"
   (
     for _ in $(seq 1 40); do
       if curl -sf -m 10 -X POST -H "$AUTH" -H "Content-Type: application/json" \
@@ -44,6 +45,7 @@ notify() {
             -d "$(jq -nc --arg t "$title" --arg m "$msg" '{title:$t, message:$m}')" \
             "$SUP/core/api/services/notify/$NOTIFY_SERVICE" >/dev/null || true
         fi
+        [ -n "$marker" ] && touch "$marker"
         exit 0
       fi
       sleep 30
@@ -116,9 +118,9 @@ load() {
 STATE=""        # last state we notified about: waiting | failed | online
 LAST_ERR=""
 log "starting: HAOS $(haos_version), kernel $(uname -r), modules from github.com/$REPO"
-if [ ! -f /data/.autoupdate_announced ]; then
-  notify "AI HAT+2 driver: auto-update enabled" "The Hailo-10H Driver add-on now fetches the module built for each HAOS release, so OS updates need no manual rebuild. You'll be told here if the HAT is ever waiting for a new build."
-  touch /data/.autoupdate_announced
+if [ ! -f /data/.autoupdate_announced_v2 ]; then
+  notify "AI HAT+2 driver: auto-update enabled" "The Hailo-10H Driver add-on now fetches the module built for each HAOS release, so OS updates need no manual rebuild. You'll be told here if the HAT is ever waiting for a new build." \
+    /data/.autoupdate_announced_v2
 fi
 while true; do
   KR=$(uname -r); VER=$(haos_version)

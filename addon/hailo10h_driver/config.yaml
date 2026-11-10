@@ -1,5 +1,5 @@
 name: Hailo-10H Driver
-version: "2026.11.2"
+version: "2026.11.3"
 slug: hailo10h_driver
 description: >-
   Loads the Hailo-10H (Raspberry Pi AI HAT+ 2) hailo1x_pci kernel module and its
