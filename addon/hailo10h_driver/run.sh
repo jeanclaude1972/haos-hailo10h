@@ -117,6 +117,7 @@ load() {
 
 STATE=""        # last state we notified about: waiting | failed | online
 LAST_ERR=""
+LOGGED_CACHE=""
 log "starting: HAOS $(haos_version), kernel $(uname -r), modules from github.com/$REPO"
 if [ ! -f /data/.autoupdate_announced_v2 ]; then
   notify "AI HAT+2 driver: auto-update enabled" "The Hailo-10H Driver add-on now fetches the module built for each HAOS release, so OS updates need no manual rebuild. You'll be told here if the HAT is ever waiting for a new build." \
@@ -134,6 +135,14 @@ while true; do
     # (Not "fresh": it isn't the one running, so loading it later is routine.)
     if [ -n "$VER" ] && [ ! -f "$CACHE/haos-$VER/hailo1x_pci.ko" ] && fetch "$VER" "$KR"; then
       rm -f "$CACHE/haos-$VER/.fresh"
+    fi
+    if [ "$LOGGED_CACHE" != "$VER" ]; then
+      if [ -f "$CACHE/haos-$VER/hailo1x_pci.ko" ]; then
+        log "driver loaded; module for HAOS $VER cached ($(sha256sum "$CACHE/haos-$VER/hailo1x_pci.ko" | cut -c1-12))"
+      else
+        log "driver loaded; no published module for HAOS $VER yet (bundled one in use)"
+      fi
+      LOGGED_CACHE="$VER"
     fi
     sleep 3600; continue
   fi
